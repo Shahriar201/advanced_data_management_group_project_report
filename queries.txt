@@ -1,0 +1,385 @@
+// =====================================================================
+// PRT563 Advanced Data Management - Assessment 4 (Sydney Group 1)
+// Harbourview Aged-Care - Neo4j graph database
+// queries.txt : Task 3 query use cases + Task 4/5 GDS analytics scripts
+// Run AFTER import.txt. Tested syntax: Neo4j 5.x, GDS 2.x.
+// A fixed reporting date (2026-10-10) is used so that results are
+// reproducible; replace date('2026-10-10') with date() in production.
+// =====================================================================
+
+
+// =====================================================================
+// TASK 3 - GRAPH DATABASE QUERIES
+// =====================================================================
+
+// ---------------------------------------------------------------------
+// USE CASE 1 (SIMPLE) - Unresolved serious incidents
+// Scenario: Each morning the clinical manager needs every High/Critical
+// incident that is not yet closed, who reported it and which residents
+// were involved, so it can be escalated to the ACQSC Serious Incident
+// Response Scheme (SIRS) within the mandatory timeframe.
+// Features: single pattern, property filters, list aggregation.
+// ---------------------------------------------------------------------
+MATCH (s:Staff)-[:REPORTED]->(i:IncidentReport)<-[inv:INVOLVED_IN]-(r:Resident)
+WHERE i.severity IN ['High', 'Critical']
+  AND i.status <> 'Closed'
+RETURN i.incidentId                       AS incident,
+       i.incidentType                     AS type,
+       i.incidentDate                     AS date,
+       i.severity                         AS severity,
+       i.status                           AS status,
+       s.firstName + ' ' + s.lastName     AS reportedBy,
+       collect(r.firstName + ' ' + r.lastName + ' (' + inv.role + ')') AS residentsInvolved
+ORDER BY date DESC;
+
+
+// ---------------------------------------------------------------------
+// USE CASE 2 (MODERATE) - High-risk medication audit trail
+// Scenario: For the quarterly medication-safety audit, the Director of
+// Nursing needs the complete chain for every high-risk medication:
+// prescribing GP -> prescription -> resident -> each administration ->
+// staff member who gave it -> second RN who witnessed it. Any dose
+// without a witness must be flagged.
+// Features: 6-hop multi-pattern traversal across 7 node labels,
+// OPTIONAL MATCH on the aggregation relationship, coalesce() flagging.
+// ---------------------------------------------------------------------
+WITH ['Warfarin', 'Insulin Glargine', 'Fentanyl Patch', 'Oxycodone'] AS highRisk
+MATCH (doc:Doctor)<-[:PRESCRIBED_BY]-(p:Prescription)-[:FOR_MEDICATION]->(m:Medication),
+      (r:Resident)-[:HAS_PRESCRIPTION]->(p)<-[:OF_PRESCRIPTION]-(ma:MedicationAdministration)<-[:ADMINISTERED]-(s:Staff)
+WHERE m.name IN highRisk
+OPTIONAL MATCH (ma)-[:WITNESSED_BY]->(w:RegisteredNurse)
+RETURN r.firstName + ' ' + r.lastName          AS resident,
+       m.name + ' ' + p.dosage                  AS medication,
+       'Dr ' + doc.lastName                     AS prescriber,
+       ma.administrationDate                    AS date,
+       toString(ma.administrationTime)          AS time,
+       ma.status                                AS status,
+       s.firstName + ' ' + s.lastName           AS administeredBy,
+       coalesce(w.firstName + ' ' + w.lastName, '** NOT WITNESSED **') AS witnessedBy
+ORDER BY date, time;
+
+
+// ---------------------------------------------------------------------
+// USE CASE 3 (COMPLEX) - Overdue care-plan reviews with contact to notify
+// Scenario: Aged Care Quality Standard 5 requires care plans to be
+// reviewed regularly. The care coordinator needs every ACTIVE care plan
+// whose most recent review has passed its next-review date (or, if never
+// reviewed, 6 months after the plan started), how many days overdue it
+// is, who reviewed it last, the resident's room and the PRIMARY emergency
+// contact who must be invited to the review meeting.
+// Features: OPTIONAL MATCH chain, ordered collect + head() to obtain
+// the latest review per plan, coalesce() fallback, temporal arithmetic
+// (duration), relationship-property filter, multi-stage WITH pipeline.
+// ---------------------------------------------------------------------
+WITH date('2026-10-10') AS today
+MATCH (r:Resident {status: 'Active'})-[:HAS_CARE_PLAN]->(cp:CarePlan {status: 'Active'})
+OPTIONAL MATCH (cp)-[:HAS_REVIEW]->(rv:CarePlanReview)-[:REVIEWED_BY]->(s:Staff)
+WITH today, r, cp, rv, s
+ORDER BY rv.reviewDate DESC
+WITH today, r, cp, head(collect({review: rv, reviewer: s})) AS latest
+WITH today, r, cp, latest,
+     coalesce(latest.review.nextReviewDate, cp.startDate + duration({months: 6})) AS dueDate
+WHERE dueDate < today
+MATCH (r)-[:LIVES_IN]->(rm:Room)
+OPTIONAL MATCH (r)-[:HAS_CONTACT {isPrimary: true}]->(ec:EmergencyContact)
+RETURN r.firstName + ' ' + r.lastName                               AS resident,
+       rm.roomNumber                                                AS room,
+       cp.carePlanId                                                AS carePlan,
+       latest.review.reviewDate                                     AS lastReview,
+       latest.reviewer.firstName + ' ' + latest.reviewer.lastName   AS lastReviewedBy,
+       dueDate,
+       duration.inDays(dueDate, today).days                         AS daysOverdue,
+       ec.firstName + ' ' + ec.lastName + ' (' + ec.relationship + ', ' + ec.phone + ')' AS notifyContact
+ORDER BY daysOverdue DESC;
+
+
+// ---------------------------------------------------------------------
+// USE CASE 4 (ADVANCED) - Above-average incident residents: risk profile
+// Scenario: (graph re-implementation and extension of SQL use case 4 of
+// Assessment 2). Management wants every resident involved in MORE
+// incidents than the facility average, enriched with (a) the latest
+// clinical assessment and whether it pre-dates the latest incident
+// (i.e. a re-assessment is required), (b) the number of high-risk
+// medications they take, and (c) the full multidisciplinary care team
+// reachable through the graph (staff who administered medication,
+// assessed, created or reviewed the care plan) - the people to invite
+// to the risk-review case conference.
+// Features: two-level aggregation (per-resident count, then facility
+// average) without a nested SQL-style subquery, correlated CALL
+// subqueries, UNION inside a subquery, COUNT {} pattern subquery,
+// list comprehension.
+// ---------------------------------------------------------------------
+WITH ['Warfarin', 'Insulin Glargine', 'Fentanyl Patch', 'Oxycodone'] AS highRisk
+MATCH (r:Resident)-[:INVOLVED_IN]->(i:IncidentReport)
+WITH highRisk, r, count(i) AS incidents, max(i.incidentDate) AS lastIncident
+WITH highRisk, collect({res: r, n: incidents, last: lastIncident}) AS rows, avg(incidents) AS facilityAvg
+UNWIND rows AS row
+WITH highRisk, row.res AS r, row.n AS incidents, row.last AS lastIncident, facilityAvg
+WHERE incidents > facilityAvg
+CALL {
+  WITH r
+  MATCH (r)-[:UNDERWENT]->(ha:HealthAssessment)
+  RETURN ha AS latestHA
+  ORDER BY ha.assessmentDate DESC
+  LIMIT 1
+}
+CALL {
+  WITH r
+  MATCH (r)-[:HAS_PRESCRIPTION]->(:Prescription)<-[:OF_PRESCRIPTION]-(:MedicationAdministration)<-[:ADMINISTERED]-(s:Staff)
+  RETURN s
+  UNION
+  WITH r
+  MATCH (r)-[:UNDERWENT]->(:HealthAssessment)-[:ASSESSED_BY]->(s:Staff)
+  RETURN s
+  UNION
+  WITH r
+  MATCH (r)-[:HAS_CARE_PLAN]->(:CarePlan)-[:CREATED_BY]->(s:Staff)
+  RETURN s
+  UNION
+  WITH r
+  MATCH (r)-[:HAS_CARE_PLAN]->(:CarePlan)-[:HAS_REVIEW]->(:CarePlanReview)-[:REVIEWED_BY]->(s:Staff)
+  RETURN s
+}
+WITH highRisk, r, incidents, facilityAvg, lastIncident, latestHA, collect(s) AS team
+RETURN r.firstName + ' ' + r.lastName                     AS resident,
+       incidents,
+       round(facilityAvg, 2)                              AS facilityAvg,
+       latestHA.mobilityLevel                             AS mobility,
+       latestHA.cognitiveStatus                           AS cognition,
+       latestHA.assessmentDate                            AS lastAssessed,
+       latestHA.assessmentDate < lastIncident             AS reassessmentRequired,
+       COUNT { (r)-[:HAS_PRESCRIPTION]->(:Prescription)-[:FOR_MEDICATION]->(m:Medication)
+               WHERE m.name IN highRisk }                 AS highRiskMeds,
+       [x IN team | x.firstName + ' ' + x.lastName + ' (' + x.role + ')'] AS careTeam
+ORDER BY incidents DESC, resident;
+
+
+// =====================================================================
+// TASK 4 - CENTRALITY ANALYTICS (Graph Data Science Library 2.x)
+// Use case: "Who holds the care network together?" - identify the staff
+// members who are structurally most important in day-to-day care
+// coordination (key-person risk, handover champions, training priority).
+// =====================================================================
+
+// 4.0 Drop any previous projection
+CALL gds.graph.drop('careNetwork', false) YIELD graphName;
+
+// 4.1 Cypher-aggregation projection: an undirected, weighted Staff-Resident
+//     "care contact" graph. Every clinical touch-point (medication
+//     administration, MAR witnessing, health assessment, care-plan creation,
+//     care-plan review) between a staff member and a resident becomes one
+//     unit of weight on a single CARES_FOR relationship. The five touch-point
+//     patterns are combined with UNION ALL inside a CALL subquery and then
+//     aggregated, because gds.graph.project() is an aggregation function.
+CALL {
+  MATCH (s:Staff)-[:ADMINISTERED]->(:MedicationAdministration)-[:OF_PRESCRIPTION]->(:Prescription)<-[:HAS_PRESCRIPTION]-(r:Resident)
+  RETURN s AS staff, r AS resident
+  UNION ALL
+  MATCH (s:Staff)<-[:WITNESSED_BY]-(:MedicationAdministration)-[:OF_PRESCRIPTION]->(:Prescription)<-[:HAS_PRESCRIPTION]-(r:Resident)
+  RETURN s AS staff, r AS resident
+  UNION ALL
+  MATCH (s:Staff)<-[:ASSESSED_BY]-(:HealthAssessment)<-[:UNDERWENT]-(r:Resident)
+  RETURN s AS staff, r AS resident
+  UNION ALL
+  MATCH (s:Staff)<-[:CREATED_BY]-(:CarePlan)<-[:HAS_CARE_PLAN]-(r:Resident)
+  RETURN s AS staff, r AS resident
+  UNION ALL
+  MATCH (s:Staff)<-[:REVIEWED_BY]-(:CarePlanReview)<-[:HAS_REVIEW]-(:CarePlan)<-[:HAS_CARE_PLAN]-(r:Resident)
+  RETURN s AS staff, r AS resident
+}
+WITH staff, resident, count(*) AS contacts
+WITH gds.graph.project(
+       'careNetwork', staff, resident,
+       { relationshipType: 'CARES_FOR',
+         relationshipProperties: { weight: toFloat(contacts) } },
+       { undirectedRelationshipTypes: ['CARES_FOR'] }) AS g
+RETURN g.graphName AS graph, g.nodeCount AS nodes, g.relationshipCount AS relationships;
+
+// 4.2 Memory estimate (good practice before running on a large graph)
+CALL gds.pageRank.stream.estimate('careNetwork', {})
+YIELD requiredMemory, nodeCount, relationshipCount;
+
+// 4.3 Degree centrality (unweighted = number of distinct residents/staff;
+//     weighted = total number of care contacts)
+CALL gds.degree.stream('careNetwork')
+YIELD nodeId, score
+RETURN gds.util.asNode(nodeId).firstName + ' ' + gds.util.asNode(nodeId).lastName AS name,
+       labels(gds.util.asNode(nodeId))[0] AS type, score AS degree
+ORDER BY degree DESC, name;
+
+CALL gds.degree.stream('careNetwork', { relationshipWeightProperty: 'weight' })
+YIELD nodeId, score
+RETURN gds.util.asNode(nodeId).firstName + ' ' + gds.util.asNode(nodeId).lastName AS name,
+       score AS weightedDegree
+ORDER BY weightedDegree DESC, name;
+
+// 4.4 PageRank (weighted) and ArticleRank (unweighted, dampens low-degree hubs)
+//     Convergence check first: on this bipartite graph the default 20
+//     iterations do not converge (didConverge = false), so 100 are used.
+CALL gds.pageRank.stats('careNetwork', { relationshipWeightProperty: 'weight' })
+YIELD ranIterations, didConverge;
+CALL gds.pageRank.stats('careNetwork', { relationshipWeightProperty: 'weight', maxIterations: 100 })
+YIELD ranIterations, didConverge;
+
+CALL gds.pageRank.stream('careNetwork', { relationshipWeightProperty: 'weight', dampingFactor: 0.85, maxIterations: 100 })
+YIELD nodeId, score
+RETURN gds.util.asNode(nodeId).firstName + ' ' + gds.util.asNode(nodeId).lastName AS name, round(score, 3) AS pageRank
+ORDER BY pageRank DESC, name;
+
+CALL gds.articleRank.stream('careNetwork', { maxIterations: 100 })
+YIELD nodeId, score
+RETURN gds.util.asNode(nodeId).firstName + ' ' + gds.util.asNode(nodeId).lastName AS name, round(score, 3) AS articleRank
+ORDER BY articleRank DESC, name;
+
+// 4.5 Betweenness centrality (brokers / bridges between resident groups)
+CALL gds.betweenness.stream('careNetwork')
+YIELD nodeId, score
+RETURN gds.util.asNode(nodeId).firstName + ' ' + gds.util.asNode(nodeId).lastName AS name, round(score, 3) AS betweenness
+ORDER BY betweenness DESC, name;
+
+// 4.6 Closeness and Harmonic centrality (how quickly a staff member can reach everyone)
+CALL gds.closeness.stream('careNetwork')
+YIELD nodeId, score
+RETURN gds.util.asNode(nodeId).firstName + ' ' + gds.util.asNode(nodeId).lastName AS name, round(score, 3) AS closeness
+ORDER BY closeness DESC, name;
+
+// (GDS versions before 2.5: use gds.alpha.closeness.harmonic.stream)
+CALL gds.closeness.harmonic.stream('careNetwork')
+YIELD nodeId, score
+RETURN gds.util.asNode(nodeId).firstName + ' ' + gds.util.asNode(nodeId).lastName AS name, round(score, 3) AS harmonic
+ORDER BY harmonic DESC, name;
+
+// 4.7 Combined staff league table: run each algorithm in MUTATE mode, then
+//     stream all scores side by side for the Staff nodes only.
+CALL gds.degree.mutate('careNetwork', { relationshipWeightProperty: 'weight', mutateProperty: 'wDegree' }) YIELD nodePropertiesWritten;
+CALL gds.pageRank.mutate('careNetwork', { relationshipWeightProperty: 'weight', maxIterations: 100, mutateProperty: 'pageRank' }) YIELD nodePropertiesWritten;
+CALL gds.betweenness.mutate('careNetwork', { mutateProperty: 'betweenness' }) YIELD nodePropertiesWritten;
+CALL gds.closeness.mutate('careNetwork', { mutateProperty: 'closeness' }) YIELD nodePropertiesWritten;
+
+CALL gds.graph.nodeProperties.stream('careNetwork', ['wDegree', 'pageRank', 'betweenness', 'closeness'])
+YIELD nodeId, nodeProperty, propertyValue
+WITH gds.util.asNode(nodeId) AS n, nodeProperty, propertyValue
+WHERE n:Staff
+WITH n, collect({k: nodeProperty, v: propertyValue}) AS props
+RETURN n.firstName + ' ' + n.lastName AS staff, n.role AS role,
+       [p IN props WHERE p.k = 'wDegree'][0].v               AS weightedDegree,
+       round([p IN props WHERE p.k = 'pageRank'][0].v, 3)    AS pageRank,
+       round([p IN props WHERE p.k = 'betweenness'][0].v, 2) AS betweenness,
+       round([p IN props WHERE p.k = 'closeness'][0].v, 3)   AS closeness
+ORDER BY betweenness DESC;
+
+// 4.8 Persist the key-person indicator back to the database for dashboards
+CALL gds.betweenness.write('careNetwork', { writeProperty: 'careBetweenness' })
+YIELD nodePropertiesWritten;
+CALL gds.pageRank.write('careNetwork', { relationshipWeightProperty: 'weight', maxIterations: 100, writeProperty: 'carePageRank' })
+YIELD nodePropertiesWritten;
+
+
+// =====================================================================
+// TASK 5 - SIMILARITY ANALYTICS (Graph Data Science Library 2.x)
+// Use case: "Find residents with similar care needs" - group residents
+// into cohorts for joint medication reviews by the visiting pharmacist
+// and for shared therapy programmes, and recommend a "care buddy"
+// resident profile when a new resident is admitted.
+// =====================================================================
+
+// 5.0 Drop any previous projections
+CALL gds.graph.drop('residentMeds', false) YIELD graphName;
+CALL gds.graph.drop('residentProfile', false) YIELD graphName;
+
+// 5.1 Bipartite projection Resident -> Medication (via CURRENT prescriptions,
+//     i.e. no end date; ceased prescriptions are excluded)
+MATCH (r:Resident)-[:HAS_PRESCRIPTION]->(p:Prescription)-[:FOR_MEDICATION]->(m:Medication)
+WHERE p.endDate IS NULL
+WITH gds.graph.project('residentMeds', r, m, { relationshipType: 'TAKES' }) AS g
+RETURN g.graphName, g.nodeCount, g.relationshipCount;
+
+// 5.2 Node Similarity - JACCARD (|A n B| / |A u B|)
+CALL gds.nodeSimilarity.stream('residentMeds', { similarityMetric: 'JACCARD', topK: 3 })
+YIELD node1, node2, similarity
+WITH gds.util.asNode(node1) AS a, gds.util.asNode(node2) AS b, similarity
+WHERE a.residentId < b.residentId
+RETURN a.firstName + ' ' + a.lastName AS resident1, b.firstName + ' ' + b.lastName AS resident2,
+       round(similarity, 3) AS jaccard,
+       [(a)-[:HAS_PRESCRIPTION]->()-[:FOR_MEDICATION]->(m)<-[:FOR_MEDICATION]-()<-[:HAS_PRESCRIPTION]-(b) | m.name] AS sharedMedication
+ORDER BY jaccard DESC, resident1, resident2;
+
+// 5.3 Node Similarity - OVERLAP (|A n B| / min(|A|,|B|)) for comparison
+CALL gds.nodeSimilarity.stream('residentMeds', { similarityMetric: 'OVERLAP', topK: 3 })
+YIELD node1, node2, similarity
+WITH gds.util.asNode(node1) AS a, gds.util.asNode(node2) AS b, similarity
+WHERE a.residentId < b.residentId
+RETURN a.firstName + ' ' + a.lastName AS resident1, b.firstName + ' ' + b.lastName AS resident2,
+       round(similarity, 3) AS overlap
+ORDER BY overlap DESC, resident1, resident2;
+
+// 5.4 Clinical-profile feature vector per resident (written as a node property)
+//     [age, mobility 0-3, cognition 0-2, nutrition 0-2, #incidents, #prescriptions]
+//     taken from the LATEST health assessment; each feature is min-max scaled
+//     by gds.scaleProperties below so that no single feature dominates.
+MATCH (r:Resident)-[:UNDERWENT]->(ha:HealthAssessment)
+WITH r, ha ORDER BY ha.assessmentDate DESC
+WITH r, head(collect(ha)) AS ha
+SET r.age        = duration.between(r.dob, date('2026-10-10')).years,
+    r.mobilityCode  = CASE ha.mobilityLevel WHEN 'Independent' THEN 0 WHEN 'AssistedWalking' THEN 1
+                                            WHEN 'WheelchairBound' THEN 2 ELSE 3 END,
+    r.cognitionCode = CASE ha.cognitiveStatus WHEN 'Normal' THEN 0 WHEN 'MildImpairment' THEN 1 ELSE 2 END,
+    r.nutritionCode = CASE ha.nutritionalStatus WHEN 'Adequate' THEN 0 WHEN 'AtRisk' THEN 1 ELSE 2 END,
+    r.incidentCount = COUNT { (r)-[:INVOLVED_IN]->() },
+    r.medicationCount = COUNT { (r)-[:HAS_PRESCRIPTION]->() };
+
+// 5.5 Project residents with their numeric features, scale, then run KNN
+MATCH (r:Resident)
+WITH gds.graph.project('residentProfile', r, null,
+       { sourceNodeProperties: r { .age, .mobilityCode, .cognitionCode, .nutritionCode, .incidentCount, .medicationCount } }) AS g
+RETURN g.graphName, g.nodeCount;
+
+CALL gds.scaleProperties.mutate('residentProfile', {
+  nodeProperties: ['age', 'mobilityCode', 'cognitionCode', 'nutritionCode', 'incidentCount', 'medicationCount'],
+  scaler: 'MinMax', mutateProperty: 'profile' })
+YIELD nodePropertiesWritten;
+
+// 5.6 K-Nearest Neighbours on the scaled profile vector (EUCLIDEAN metric,
+//     similarity = 1 / (1 + distance); deterministic run: randomSeed +
+//     concurrency 1; topK 2 so that ties for first place are visible)
+CALL gds.knn.stream('residentProfile', {
+  nodeProperties: { profile: 'EUCLIDEAN' }, topK: 2,
+  randomSeed: 42, concurrency: 1, sampleRate: 1.0 })
+YIELD node1, node2, similarity
+WITH gds.util.asNode(node1) AS r, gds.util.asNode(node2) AS nb, similarity
+ORDER BY similarity DESC
+RETURN r.firstName + ' ' + r.lastName AS resident,
+       collect(nb.firstName + ' ' + nb.lastName + ' (' + toString(round(similarity, 3)) + ')') AS nearestNeighbours
+ORDER BY resident;
+
+// 5.7 Exact cross-check with Cypher similarity FUNCTIONS: write the scaled
+//     profile back to the database, then compute COSINE similarity for every
+//     pair (exhaustive, so no approximation) and keep each resident's top 2.
+CALL gds.graph.nodeProperties.write('residentProfile', ['profile'])
+YIELD propertiesWritten;
+
+MATCH (a:Resident), (b:Resident)
+WHERE a <> b
+WITH a, b, gds.similarity.cosine(a.profile, b.profile) AS cosine
+ORDER BY cosine DESC
+WITH a, collect(b.firstName + ' ' + b.lastName + ' (' + toString(round(cosine, 3)) + ')')[0..2] AS top2
+RETURN a.firstName + ' ' + a.lastName AS resident, top2 AS mostSimilarByCosine
+ORDER BY resident;
+
+// 5.8 Persist the Jaccard result as SIMILAR_MEDS relationships for the
+//     pharmacist dashboard, then query cohorts directly in Cypher
+CALL gds.nodeSimilarity.write('residentMeds', {
+  similarityMetric: 'JACCARD', topK: 3,
+  writeRelationshipType: 'SIMILAR_MEDS', writeProperty: 'score' })
+YIELD nodesCompared, relationshipsWritten;
+
+MATCH (a:Resident)-[s:SIMILAR_MEDS]->(b:Resident)
+WHERE a.residentId < b.residentId
+RETURN a.firstName + ' ' + a.lastName AS resident, b.firstName + ' ' + b.lastName AS similarResident,
+       round(s.score, 3) AS score
+ORDER BY score DESC;
+
+// Clean-up of in-memory projections
+CALL gds.graph.drop('careNetwork', false)     YIELD graphName;
+CALL gds.graph.drop('residentMeds', false)    YIELD graphName;
+CALL gds.graph.drop('residentProfile', false) YIELD graphName;
