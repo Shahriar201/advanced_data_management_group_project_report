@@ -1,0 +1,349 @@
+// =====================================================================
+// PRT563 Advanced Data Management - Assessment 4 (Sydney Group 1)
+// Harbourview Aged-Care - Relational (SQLite) to Neo4j migration
+// import.txt : constraints, indexes, node import, relationship import
+// =====================================================================
+// Target platform : Neo4j 5.x (tested syntax for 5.26 LTS / AuraDB)
+//                   + Graph Data Science library 2.x (for Tasks 4 and 5)
+// Setup           : copy the 20 .csv files from /csv into the DBMS
+//                   "import" folder (Neo4j Desktop: ... > Open folder > Import).
+// How to run      : paste this whole file into Neo4j Browser (multi-statement
+//                   editor enabled) or run it with cypher-shell:
+//                   cypher-shell -u neo4j -p <pwd> -f import.txt
+// The script is idempotent: constraints use IF NOT EXISTS and every node
+// and relationship is written with MERGE, so it can be re-run safely.
+// NULLs: SQLite NULLs were exported as empty cells; LOAD CSV returns them
+// as null, and SET x = null simply does not create the property.
+// =====================================================================
+
+// ---------------------------------------------------------------------
+// STEP 0 (optional) - clean database before a full re-load
+// ---------------------------------------------------------------------
+MATCH (n) DETACH DELETE n;
+
+// ---------------------------------------------------------------------
+// STEP 1 - UNIQUENESS CONSTRAINTS (each one also creates a RANGE index
+//          on the key, which makes the MERGE / MATCH look-ups below O(log n))
+// ---------------------------------------------------------------------
+CREATE CONSTRAINT room_id_unique        IF NOT EXISTS FOR (n:Room)                     REQUIRE n.roomId IS UNIQUE;
+CREATE CONSTRAINT room_number_unique    IF NOT EXISTS FOR (n:Room)                     REQUIRE n.roomNumber IS UNIQUE;
+CREATE CONSTRAINT staff_id_unique       IF NOT EXISTS FOR (n:Staff)                    REQUIRE n.staffId IS UNIQUE;
+CREATE CONSTRAINT staff_email_unique    IF NOT EXISTS FOR (n:Staff)                    REQUIRE n.email IS UNIQUE;
+CREATE CONSTRAINT qualification_unique  IF NOT EXISTS FOR (n:Qualification)            REQUIRE n.name IS UNIQUE;
+CREATE CONSTRAINT doctor_id_unique      IF NOT EXISTS FOR (n:Doctor)                   REQUIRE n.doctorId IS UNIQUE;
+CREATE CONSTRAINT resident_id_unique    IF NOT EXISTS FOR (n:Resident)                 REQUIRE n.residentId IS UNIQUE;
+CREATE CONSTRAINT resident_medicare_unq IF NOT EXISTS FOR (n:Resident)                 REQUIRE n.medicareNo IS UNIQUE;
+CREATE CONSTRAINT contact_id_unique     IF NOT EXISTS FOR (n:EmergencyContact)         REQUIRE n.contactId IS UNIQUE;
+CREATE CONSTRAINT document_id_unique    IF NOT EXISTS FOR (n:AdmissionDocument)        REQUIRE n.documentId IS UNIQUE;
+CREATE CONSTRAINT care_plan_id_unique   IF NOT EXISTS FOR (n:CarePlan)                 REQUIRE n.carePlanId IS UNIQUE;
+CREATE CONSTRAINT review_id_unique      IF NOT EXISTS FOR (n:CarePlanReview)           REQUIRE n.reviewId IS UNIQUE;
+CREATE CONSTRAINT assessment_id_unique  IF NOT EXISTS FOR (n:HealthAssessment)         REQUIRE n.assessmentId IS UNIQUE;
+CREATE CONSTRAINT medication_id_unique  IF NOT EXISTS FOR (n:Medication)               REQUIRE n.medicationId IS UNIQUE;
+CREATE CONSTRAINT prescription_id_unq   IF NOT EXISTS FOR (n:Prescription)             REQUIRE n.prescriptionId IS UNIQUE;
+CREATE CONSTRAINT mar_id_unique         IF NOT EXISTS FOR (n:MedicationAdministration) REQUIRE n.marId IS UNIQUE;
+CREATE CONSTRAINT incident_id_unique    IF NOT EXISTS FOR (n:IncidentReport)           REQUIRE n.incidentId IS UNIQUE;
+
+// ---------------------------------------------------------------------
+// STEP 2 - SECONDARY INDEXES (support the query use cases in queries.txt)
+// ---------------------------------------------------------------------
+// Range indexes on frequently filtered properties
+CREATE INDEX resident_name_idx      IF NOT EXISTS FOR (n:Resident)                 ON (n.lastName, n.firstName);
+CREATE INDEX resident_status_idx    IF NOT EXISTS FOR (n:Resident)                 ON (n.status);
+CREATE INDEX staff_role_idx         IF NOT EXISTS FOR (n:Staff)                    ON (n.role);
+CREATE INDEX incident_severity_idx  IF NOT EXISTS FOR (n:IncidentReport)           ON (n.severity, n.status);
+CREATE INDEX incident_date_idx      IF NOT EXISTS FOR (n:IncidentReport)           ON (n.incidentDate);
+CREATE INDEX mar_date_idx           IF NOT EXISTS FOR (n:MedicationAdministration) ON (n.administrationDate);
+CREATE INDEX careplan_status_idx    IF NOT EXISTS FOR (n:CarePlan)                 ON (n.status);
+CREATE INDEX review_next_date_idx   IF NOT EXISTS FOR (n:CarePlanReview)           ON (n.nextReviewDate);
+CREATE INDEX assessment_date_idx    IF NOT EXISTS FOR (n:HealthAssessment)         ON (n.assessmentDate);
+// Text index for "contains / starts with" medication look-ups by pharmacists
+CREATE TEXT INDEX medication_name_txt IF NOT EXISTS FOR (n:Medication)             ON (n.name);
+// Relationship property index (incident role filtering)
+CREATE INDEX involvement_role_idx   IF NOT EXISTS FOR ()-[r:INVOLVED_IN]-()        ON (r.role);
+
+// Wait until all indexes are ONLINE before loading
+CALL db.awaitIndexes(300);
+
+// =====================================================================
+// STEP 3 - NODES
+// =====================================================================
+
+// 3.1 Room
+LOAD CSV WITH HEADERS FROM 'file:///room.csv' AS row
+MERGE (rm:Room {roomId: toInteger(row.room_id)})
+SET rm.roomNumber = row.room_number,
+    rm.roomType   = row.room_type,
+    rm.floor      = toInteger(row.floor),
+    rm.wing       = row.wing,
+    rm.capacity   = toInteger(row.capacity);
+
+// 3.2 Staff (EER superclass) - shared attributes
+LOAD CSV WITH HEADERS FROM 'file:///staff.csv' AS row
+MERGE (s:Staff {staffId: toInteger(row.staff_id)})
+SET s.firstName      = row.first_name,
+    s.lastName       = row.last_name,
+    s.phone          = row.phone,
+    s.email          = row.email,
+    s.hireDate       = date(row.hire_date),
+    s.role           = row.role,
+    s.employmentType = row.employment_type;
+
+// 3.3 Specialisation -> additional labels + subclass-specific properties
+//     (disjoint, total: each Staff node receives exactly one subtype label)
+LOAD CSV WITH HEADERS FROM 'file:///registered_nurse.csv' AS row
+MATCH (s:Staff {staffId: toInteger(row.staff_id)})
+SET s:RegisteredNurse:ClinicalAssessor,            // ClinicalAssessor = categorization (RN U AHP)
+    s.registrationNo  = row.registration_no,
+    s.yearsExperience = toInteger(row.years_experience);
+
+LOAD CSV WITH HEADERS FROM 'file:///care_worker.csv' AS row
+MATCH (s:Staff {staffId: toInteger(row.staff_id)})
+SET s:CareWorker,
+    s.certificateLevel = row.certificate_level,
+    s.yearsExperience  = toInteger(row.years_experience);
+
+LOAD CSV WITH HEADERS FROM 'file:///allied_health_professional.csv' AS row
+MATCH (s:Staff {staffId: toInteger(row.staff_id)})
+SET s:AlliedHealthProfessional:ClinicalAssessor,
+    s.specialty      = row.specialty,
+    s.registrationNo = row.registration_no;
+
+LOAD CSV WITH HEADERS FROM 'file:///administrative_staff.csv' AS row
+MATCH (s:Staff {staffId: toInteger(row.staff_id)})
+SET s:AdministrativeStaff,
+    s.positionTitle = row.position_title;
+
+// 3.4 Qualification (multivalued attribute promoted to a shared node)
+LOAD CSV WITH HEADERS FROM 'file:///staff_qualification.csv' AS row
+MERGE (:Qualification {name: row.qualification});
+
+// 3.5 Doctor (external GP)
+LOAD CSV WITH HEADERS FROM 'file:///doctor.csv' AS row
+MERGE (d:Doctor {doctorId: toInteger(row.doctor_id)})
+SET d.firstName  = row.first_name,
+    d.lastName   = row.last_name,
+    d.clinicName = row.clinic_name,
+    d.phone      = row.phone,
+    d.email      = row.email;
+
+// 3.6 Resident (composite Prior_Address kept as flattened properties;
+//     derived Age is NOT stored - computed with duration.between() at query time)
+LOAD CSV WITH HEADERS FROM 'file:///resident.csv' AS row
+MERGE (r:Resident {residentId: toInteger(row.resident_id)})
+SET r.firstName     = row.first_name,
+    r.lastName      = row.last_name,
+    r.dob           = date(row.dob),
+    r.gender        = row.gender,
+    r.admissionDate = date(row.admission_date),
+    r.medicareNo    = row.medicare_no,
+    r.priorStreet   = row.prior_street,
+    r.priorSuburb   = row.prior_suburb,
+    r.priorState    = row.prior_state,
+    r.priorPostcode = row.prior_postcode,
+    r.status        = row.status;
+
+// 3.7 EmergencyContact (weak entity in EER)
+LOAD CSV WITH HEADERS FROM 'file:///emergency_contact.csv' AS row
+MERGE (ec:EmergencyContact {contactId: toInteger(row.contact_id)})
+SET ec.firstName    = row.first_name,
+    ec.lastName     = row.last_name,
+    ec.relationship = row.relationship,
+    ec.phone        = row.phone,
+    ec.email        = row.email,
+    ec.street       = row.street,
+    ec.suburb       = row.suburb,
+    ec.state        = row.state,
+    ec.postcode     = row.postcode;
+
+// 3.8 AdmissionDocument (weak entity in EER)
+LOAD CSV WITH HEADERS FROM 'file:///admission_document.csv' AS row
+MERGE (ad:AdmissionDocument {documentId: toInteger(row.document_id)})
+SET ad.documentType = row.document_type,
+    ad.uploadDate   = date(row.upload_date),
+    ad.verified     = (row.verified = '1');
+
+// 3.9 CarePlan
+LOAD CSV WITH HEADERS FROM 'file:///care_plan.csv' AS row
+MERGE (cp:CarePlan {carePlanId: toInteger(row.care_plan_id)})
+SET cp.startDate = date(row.start_date),
+    cp.status    = row.status;
+
+// 3.10 Care_Plan_Goal (multivalued attribute) -> list property on CarePlan
+LOAD CSV WITH HEADERS FROM 'file:///care_plan_goal.csv' AS row
+WITH toInteger(row.care_plan_id) AS cpId, collect(row.goal_description) AS goals
+MATCH (cp:CarePlan {carePlanId: cpId})
+SET cp.goals = goals;
+
+// 3.11 CarePlanReview (weak entity in EER)
+LOAD CSV WITH HEADERS FROM 'file:///care_plan_review.csv' AS row
+MERGE (rv:CarePlanReview {reviewId: toInteger(row.review_id)})
+SET rv.reviewDate     = date(row.review_date),
+    rv.outcomeNotes   = row.outcome_notes,
+    rv.nextReviewDate = date(row.next_review_date);
+
+// 3.12 HealthAssessment
+LOAD CSV WITH HEADERS FROM 'file:///health_assessment.csv' AS row
+MERGE (ha:HealthAssessment {assessmentId: toInteger(row.assessment_id)})
+SET ha.assessmentDate    = date(row.assessment_date),
+    ha.mobilityLevel     = row.mobility_level,
+    ha.cognitiveStatus   = row.cognitive_status,
+    ha.nutritionalStatus = row.nutritional_status,
+    ha.clinicalNotes     = row.clinical_notes;
+
+// 3.13 Medication
+LOAD CSV WITH HEADERS FROM 'file:///medication.csv' AS row
+MERGE (m:Medication {medicationId: toInteger(row.medication_id)})
+SET m.name         = row.medication_name,
+    m.form         = row.form,
+    m.strength     = row.strength,
+    m.manufacturer = row.manufacturer;
+
+// 3.14 Prescription (reified ternary relationship Doctor x Resident x Medication)
+LOAD CSV WITH HEADERS FROM 'file:///prescription.csv' AS row
+MERGE (p:Prescription {prescriptionId: toInteger(row.prescription_id)})
+SET p.dosage    = row.dosage,
+    p.frequency = row.frequency,
+    p.route     = row.route,
+    p.startDate = date(row.start_date),
+    p.endDate   = CASE WHEN row.end_date IS NULL THEN null ELSE date(row.end_date) END;
+
+// 3.15 MedicationAdministration (the AGGREGATED "Staff administers Prescription" event)
+LOAD CSV WITH HEADERS FROM 'file:///medication_administration_record.csv' AS row
+MERGE (ma:MedicationAdministration {marId: toInteger(row.mar_id)})
+SET ma.administrationDate = date(row.administration_date),
+    ma.administrationTime = time(row.administration_time),
+    ma.status             = row.status;
+
+// 3.16 IncidentReport
+LOAD CSV WITH HEADERS FROM 'file:///incident_report.csv' AS row
+MERGE (i:IncidentReport {incidentId: toInteger(row.incident_id)})
+SET i.incidentType   = row.incident_type,
+    i.incidentDate   = date(row.incident_date),
+    i.incidentTime   = time(row.incident_time),
+    i.location       = row.location,
+    i.description    = row.description,
+    i.severity       = row.severity,
+    i.followUpAction = row.follow_up_action,
+    i.status         = row.status;
+
+// =====================================================================
+// STEP 4 - RELATIONSHIPS (every relational foreign key becomes an edge)
+// =====================================================================
+
+// 4.1 Resident.room_id -> (:Resident)-[:LIVES_IN]->(:Room)
+LOAD CSV WITH HEADERS FROM 'file:///resident.csv' AS row
+MATCH (r:Resident {residentId: toInteger(row.resident_id)})
+MATCH (rm:Room    {roomId:     toInteger(row.room_id)})
+MERGE (r)-[:LIVES_IN]->(rm);
+
+// 4.2 Staff_Qualification -> (:Staff)-[:HAS_QUALIFICATION]->(:Qualification)
+LOAD CSV WITH HEADERS FROM 'file:///staff_qualification.csv' AS row
+MATCH (s:Staff {staffId: toInteger(row.staff_id)})
+MATCH (q:Qualification {name: row.qualification})
+MERGE (s)-[:HAS_QUALIFICATION]->(q);
+
+// 4.3 Emergency_Contact.resident_id -> (:Resident)-[:HAS_CONTACT {isPrimary}]->(:EmergencyContact)
+//     The primary contact also receives a :PrimaryContact label for fast look-up.
+LOAD CSV WITH HEADERS FROM 'file:///emergency_contact.csv' AS row
+MATCH (r:Resident {residentId: toInteger(row.resident_id)})
+MATCH (ec:EmergencyContact {contactId: toInteger(row.contact_id)})
+MERGE (r)-[hc:HAS_CONTACT]->(ec)
+SET hc.isPrimary = (row.is_primary = '1')
+WITH ec, row WHERE row.is_primary = '1'
+SET ec:PrimaryContact;
+
+// 4.4 Admission_Document -> HAS_DOCUMENT and VERIFIED_BY
+LOAD CSV WITH HEADERS FROM 'file:///admission_document.csv' AS row
+MATCH (r:Resident {residentId: toInteger(row.resident_id)})
+MATCH (ad:AdmissionDocument {documentId: toInteger(row.document_id)})
+MERGE (r)-[:HAS_DOCUMENT]->(ad)
+WITH ad, row WHERE row.verified_by_staff_id IS NOT NULL
+MATCH (s:Staff {staffId: toInteger(row.verified_by_staff_id)})
+MERGE (ad)-[:VERIFIED_BY]->(s);
+
+// 4.5 Care_Plan -> HAS_CARE_PLAN and CREATED_BY
+LOAD CSV WITH HEADERS FROM 'file:///care_plan.csv' AS row
+MATCH (r:Resident {residentId: toInteger(row.resident_id)})
+MATCH (cp:CarePlan {carePlanId: toInteger(row.care_plan_id)})
+MATCH (s:Staff {staffId: toInteger(row.created_by_staff_id)})
+MERGE (r)-[:HAS_CARE_PLAN]->(cp)
+MERGE (cp)-[:CREATED_BY]->(s);
+
+// 4.6 Care_Plan_Review -> HAS_REVIEW and REVIEWED_BY
+LOAD CSV WITH HEADERS FROM 'file:///care_plan_review.csv' AS row
+MATCH (cp:CarePlan {carePlanId: toInteger(row.care_plan_id)})
+MATCH (rv:CarePlanReview {reviewId: toInteger(row.review_id)})
+MATCH (s:Staff {staffId: toInteger(row.reviewed_by_staff_id)})
+MERGE (cp)-[:HAS_REVIEW]->(rv)
+MERGE (rv)-[:REVIEWED_BY]->(s);
+
+// 4.7 Health_Assessment -> UNDERWENT and ASSESSED_BY (categorization:
+//     the two mutually-exclusive FKs collapse into ONE relationship whose
+//     target must carry the :ClinicalAssessor label)
+LOAD CSV WITH HEADERS FROM 'file:///health_assessment.csv' AS row
+MATCH (r:Resident {residentId: toInteger(row.resident_id)})
+MATCH (ha:HealthAssessment {assessmentId: toInteger(row.assessment_id)})
+MATCH (s:ClinicalAssessor {staffId: toInteger(coalesce(row.assessed_by_rn_id, row.assessed_by_ahp_id))})
+MERGE (r)-[:UNDERWENT]->(ha)
+MERGE (ha)-[:ASSESSED_BY {assessorType: row.assessed_by_type}]->(s);
+
+// 4.8 Prescription -> HAS_PRESCRIPTION, PRESCRIBED_BY, FOR_MEDICATION
+LOAD CSV WITH HEADERS FROM 'file:///prescription.csv' AS row
+MATCH (p:Prescription {prescriptionId: toInteger(row.prescription_id)})
+MATCH (r:Resident   {residentId:   toInteger(row.resident_id)})
+MATCH (d:Doctor     {doctorId:     toInteger(row.doctor_id)})
+MATCH (m:Medication {medicationId: toInteger(row.medication_id)})
+MERGE (r)-[:HAS_PRESCRIPTION]->(p)
+MERGE (p)-[:PRESCRIBED_BY]->(d)
+MERGE (p)-[:FOR_MEDICATION]->(m);
+
+// 4.9 Medication_Administration_Record -> ADMINISTERED, OF_PRESCRIPTION,
+//     WITNESSED_BY (aggregation: the second RN verifies the whole event node)
+LOAD CSV WITH HEADERS FROM 'file:///medication_administration_record.csv' AS row
+MATCH (ma:MedicationAdministration {marId: toInteger(row.mar_id)})
+MATCH (p:Prescription {prescriptionId: toInteger(row.prescription_id)})
+MATCH (s:Staff {staffId: toInteger(row.administered_by_staff_id)})
+MERGE (s)-[:ADMINISTERED]->(ma)
+MERGE (ma)-[:OF_PRESCRIPTION]->(p)
+WITH ma, row WHERE row.verified_by_staff_id IS NOT NULL
+MATCH (rn:RegisteredNurse {staffId: toInteger(row.verified_by_staff_id)})
+MERGE (ma)-[:WITNESSED_BY]->(rn);
+
+// 4.10 Incident_Report.reported_by_staff_id -> (:Staff)-[:REPORTED]->(:IncidentReport)
+LOAD CSV WITH HEADERS FROM 'file:///incident_report.csv' AS row
+MATCH (i:IncidentReport {incidentId: toInteger(row.incident_id)})
+MATCH (s:Staff {staffId: toInteger(row.reported_by_staff_id)})
+MERGE (s)-[:REPORTED]->(i);
+
+// 4.11 Incident_Involvement (M:N associative entity) -> relationship with property
+LOAD CSV WITH HEADERS FROM 'file:///incident_involvement.csv' AS row
+MATCH (r:Resident {residentId: toInteger(row.resident_id)})
+MATCH (i:IncidentReport {incidentId: toInteger(row.incident_id)})
+MERGE (r)-[inv:INVOLVED_IN]->(i)
+SET inv.role = row.involvement_role;
+
+// =====================================================================
+// STEP 5 - MIGRATION VALIDATION (expected: 134 nodes, 208 relationships)
+// =====================================================================
+MATCH (n) RETURN count(n) AS totalNodes;                 // 134
+MATCH ()-[r]->() RETURN count(r) AS totalRelationships;  // 208
+
+MATCH (n) UNWIND labels(n) AS label
+RETURN label, count(*) AS nodes ORDER BY label;
+
+MATCH ()-[r]->() RETURN type(r) AS relationship, count(*) AS total ORDER BY relationship;
+
+// Business-rule check: at most one primary contact per resident (expect 0 rows)
+MATCH (r:Resident)-[:HAS_CONTACT {isPrimary: true}]->(ec)
+WITH r, count(ec) AS primaries WHERE primaries > 1
+RETURN r.residentId, primaries;
+
+// Categorization check: every assessment signed by a ClinicalAssessor (expect 0)
+MATCH (ha:HealthAssessment) WHERE NOT (ha)-[:ASSESSED_BY]->(:ClinicalAssessor)
+RETURN count(ha) AS invalidAssessments;
+
+// Aggregation check: witnesses must be Registered Nurses (expect 0)
+MATCH (:MedicationAdministration)-[:WITNESSED_BY]->(s) WHERE NOT s:RegisteredNurse
+RETURN count(s) AS invalidWitnesses;
+
+SHOW INDEXES YIELD name, type, labelsOrTypes, properties, state;
