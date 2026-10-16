@@ -1,0 +1,11 @@
+staff_id,first_name,last_name,phone,email,hire_date,role,employment_type
+1,Emily,Watson,0411 200 001,emily.watson@harbourview.example,2015-03-01,RN,Full-time
+2,Daniel,Kim,0411 200 002,daniel.kim@harbourview.example,2019-06-10,RN,Full-time
+3,Priya,Sharma,0411 200 003,priya.sharma@harbourview.example,2021-09-15,RN,Part-time
+4,Michael,Chen,0411 200 004,michael.chen@harbourview.example,2022-01-20,CareWorker,Full-time
+5,Sarah,Ahmed,0411 200 005,sarah.ahmed@harbourview.example,2020-04-05,CareWorker,Full-time
+6,Liam,Nguyen,0411 200 006,liam.nguyen@harbourview.example,2023-07-11,CareWorker,Casual
+7,Grace,Park,0411 200 007,grace.park@harbourview.example,2018-02-14,AlliedHealth,Part-time
+8,Noah,Ibrahim,0411 200 008,noah.ibrahim@harbourview.example,2020-11-30,AlliedHealth,Part-time
+9,Olivia,Brown,0411 200 009,olivia.brown@harbourview.example,2014-05-19,Admin,Full-time
+10,Ethan,Wilson,0411 200 010,ethan.wilson@harbourview.example,2021-08-23,Admin,Full-time

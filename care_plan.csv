@@ -1,0 +1,10 @@
+care_plan_id,resident_id,start_date,status,created_by_staff_id
+1,1,2023-01-12,Active,1
+2,2,2022-07-25,Active,2
+3,3,2023-05-18,Active,1
+4,4,2021-11-05,Superseded,2
+5,4,2024-01-10,Active,3
+6,5,2024-02-25,Active,1
+7,6,2022-03-20,Active,2
+8,7,2024-08-05,Active,3
+9,8,2020-09-15,Closed,1

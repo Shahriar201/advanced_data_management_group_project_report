@@ -1,0 +1,7 @@
+incident_id,incident_type,incident_date,incident_time,location,description,severity,reported_by_staff_id,follow_up_action,status
+1,Fall,2026-07-20,14:30,Room 102,"Resident found on floor near bed, no visible injury",Medium,4,"Physiotherapy review requested, bed alarm installed",Closed
+2,MedicationError,2026-07-25,09:15,Medication Room,Incorrect Metformin dose administered (1000mg instead of 500mg),High,5,"RN notified immediately, GP consulted, resident monitored, reported to ACQSC",Closed
+3,Injury,2026-08-01,11:00,Dining Room,Minor skin tear on resident's forearm during transfer,Low,6,"Wound dressed, care plan updated with transfer technique notes",Closed
+4,Fall,2026-08-05,03:00,Room 201,Resident fell attempting to walk unassisted overnight,High,1,"Increased overnight checks, family notified",UnderReview
+5,Behavioural,2026-08-10,16:00,Common Room,Altercation between two residents during group activity,Medium,7,"Residents separated and supported, both care plans reviewed",Closed
+6,Fall,2026-08-16,07:45,Room 101 ensuite,"Resident slipped in bathroom, suspected hip injury",Critical,2,"Ambulance called, hospital transfer, family notified immediately",Open

@@ -1,0 +1,8 @@
+incident_id,resident_id,involvement_role
+1,3,Primary
+2,2,Primary
+3,6,Primary
+4,5,Primary
+5,1,Primary
+5,3,Secondary
+6,1,Primary

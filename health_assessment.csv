@@ -1,0 +1,11 @@
+assessment_id,resident_id,assessment_date,mobility_level,cognitive_status,nutritional_status,clinical_notes,assessed_by_type,assessed_by_rn_id,assessed_by_ahp_id
+1,1,2023-01-11,Independent,Normal,Adequate,Baseline assessment on admission,RN,1,
+2,2,2022-07-23,AssistedWalking,MildImpairment,Adequate,Baseline assessment on admission,RN,2,
+3,3,2023-05-16,Independent,Normal,AtRisk,Dietitian review recommended,AlliedHealth,,8
+4,4,2021-11-03,WheelchairBound,Normal,Adequate,Baseline assessment on admission,RN,1,
+5,4,2024-01-12,WheelchairBound,MildImpairment,Adequate,"Follow-up assessment, mild cognitive decline noted",RN,3,
+6,5,2024-02-22,AssistedWalking,Normal,Adequate,Physiotherapy assessment on admission,AlliedHealth,,7
+7,6,2022-03-16,Independent,Normal,Adequate,Baseline assessment on admission,RN,2,
+8,7,2024-08-03,Bedbound,Dementia,Malnourished,"High-needs resident, dietitian and RN follow-up required",RN,1,
+9,7,2025-02-01,Bedbound,Dementia,AtRisk,Nutrition improved following dietitian intervention,AlliedHealth,,8
+10,8,2020-09-11,WheelchairBound,MildImpairment,Adequate,Baseline assessment on admission,RN,2,

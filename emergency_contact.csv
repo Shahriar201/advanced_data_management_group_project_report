@@ -1,0 +1,12 @@
+contact_id,resident_id,first_name,last_name,relationship,phone,email,street,suburb,state,postcode,is_primary
+1,1,Susan,Thompson,Daughter,0422 300 001,susan.t@example.com,2 Elm St,Manly,NSW,2095,1
+2,1,Peter,Thompson,Son,0422 300 002,peter.t@example.com,9 Oak St,Dee Why,NSW,2099,0
+3,2,Karen,Ellis,Daughter,0422 300 003,karen.e@example.com,4 Campbell St,Bondi,NSW,2026,1
+4,3,Anh,Nguyen,Son,0422 300 004,anh.n@example.com,6 Darling St,Balmain,NSW,2041,1
+5,3,Linh,Nguyen,Daughter,0422 300 005,linh.n@example.com,31 James St,Rozelle,NSW,2039,0
+6,4,Emma,Carter,Daughter,0422 300 006,emma.c@example.com,18 King St,Newtown,NSW,2042,1
+7,5,David,Wong,Son,0422 300 007,david.w@example.com,2 Marion St,Parramatta,NSW,2150,1
+8,6,Mary,OBrien,Daughter,0422 300 008,mary.o@example.com,7 Victor St,Chatswood,NSW,2067,1
+9,6,John,OBrien,Son,0422 300 009,john.o@example.com,15 Help St,Chatswood,NSW,2067,0
+10,7,Susan,Davies,Niece,0422 300 010,susan.d@example.com,3 Ash St,Hornsby,NSW,2077,1
+11,8,Paul,Martin,Son,0422 300 011,paul.m@example.com,21 High St,Randwick,NSW,2031,1

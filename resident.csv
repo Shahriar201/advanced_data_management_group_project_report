@@ -1,0 +1,9 @@
+resident_id,first_name,last_name,dob,gender,admission_date,medicare_no,room_id,prior_street,prior_suburb,prior_state,prior_postcode,status
+1,Margaret,Thompson,1938-04-12,Female,2023-01-10,2951 11111 1,1,14 Wattle St,Manly,NSW,2095,Active
+2,Robert,Ellis,1935-09-03,Male,2022-07-22,2951 22222 2,2,8 Beach Rd,Bondi,NSW,2026,Active
+3,Dorothy,Nguyen,1940-12-25,Female,2023-05-15,2951 33333 3,2,22 Harbour St,Balmain,NSW,2041,Active
+4,William,Carter,1933-02-18,Male,2021-11-01,2951 44444 4,3,5 King St,Newtown,NSW,2042,Active
+5,Patricia,Wong,1942-06-30,Female,2024-02-20,2951 55555 5,4,19 Church St,Parramatta,NSW,2150,Active
+6,James,OBrien,1937-08-09,Male,2022-03-14,2951 66666 6,4,3 Pitt St,Chatswood,NSW,2067,Active
+7,Helen,Davies,1945-01-05,Female,2024-08-01,2951 77777 7,5,11 George St,Hornsby,NSW,2077,Active
+8,George,Martin,1930-10-22,Male,2020-09-09,2951 88888 8,6,27 Oxford St,Randwick,NSW,2031,Discharged

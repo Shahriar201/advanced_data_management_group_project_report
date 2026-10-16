@@ -1,0 +1,15 @@
+prescription_id,resident_id,doctor_id,medication_id,dosage,frequency,route,start_date,end_date
+1,1,1,1,500mg,Twice daily,Oral,2023-01-10,
+2,1,1,3,20mg,Once daily,Oral,2023-01-10,
+3,2,2,2,500mg,Twice daily,Oral,2022-07-22,
+4,2,2,7,2mg,Once daily,Oral,2022-07-22,
+5,3,1,1,500mg,As needed,Oral,2023-05-15,
+6,4,3,4,5mg,Once daily,Oral,2021-11-01,
+7,4,3,5,40mg,Once daily,Oral,2021-11-01,
+8,5,2,6,10 units,Nightly,Injection,2024-02-20,
+9,5,2,2,500mg,Twice daily,Oral,2024-02-20,
+10,6,1,3,20mg,Once daily,Oral,2022-03-14,
+11,7,3,9,25mcg/hr,Every 72 hours,Topical,2024-08-01,
+12,7,3,1,500mg,As needed,Oral,2024-08-01,
+13,8,2,10,5mg,Every 6 hours as needed,Oral,2020-09-09,2024-06-01
+14,6,1,8,2 puffs,As needed,Inhaled,2022-03-14,

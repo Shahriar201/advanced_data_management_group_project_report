@@ -1,0 +1,11 @@
+medication_id,medication_name,form,strength,manufacturer
+1,Paracetamol,Tablet,500mg,PharmaCorp
+2,Metformin,Tablet,500mg,MediGen
+3,Atorvastatin,Tablet,20mg,MediGen
+4,Donepezil,Tablet,5mg,NeuroPharm
+5,Furosemide,Tablet,40mg,PharmaCorp
+6,Insulin Glargine,Injection,100 units/mL,MediGen
+7,Warfarin,Tablet,2mg,PharmaCorp
+8,Salbutamol,Inhaler,100mcg,RespiraCare
+9,Fentanyl Patch,Patch,25mcg/hr,PharmaCorp
+10,Oxycodone,Tablet,5mg,PharmaCorp

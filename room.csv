@@ -1,0 +1,7 @@
+room_id,room_number,room_type,floor,wing,capacity
+1,101,Single,1,North,1
+2,102,Shared,1,North,2
+3,103,Single,1,South,1
+4,201,Shared,2,East,2
+5,202,Single,2,East,1
+6,203,Shared,2,West,2
